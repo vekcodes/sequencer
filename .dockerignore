@@ -1,0 +1,9 @@
+node_modules
+.git
+.env
+*.md
+.vscode
+.idea
+apps/web/dist
+apps/api/dist
+packages/db/migrations/*.sql.bak

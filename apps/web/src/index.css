@@ -1,0 +1,14 @@
+/* Reset — auth.css provides all design tokens and component styles */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+#root {
+  min-height: 100svh;
+}
+
+body {
+  margin: 0;
+}

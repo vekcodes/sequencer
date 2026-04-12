@@ -1,0 +1,27 @@
+{
+  "name": "cold-email-sequencer",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n api,web -c yellow,cyan \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:web": "npm run dev -w @ces/web",
+    "dev:api": "npm run dev -w @ces/api",
+    "build:web": "npm run build -w @ces/web",
+    "build:api": "npm run build -w @ces/api",
+    "db:generate": "npm run generate -w @ces/db",
+    "db:migrate": "npm run migrate -w @ces/db",
+    "db:push": "npm run push -w @ces/db",
+    "db:studio": "npm run studio -w @ces/db",
+    "db:seed": "npm run seed -w @ces/db",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}
