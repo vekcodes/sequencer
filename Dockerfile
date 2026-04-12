@@ -34,6 +34,9 @@ COPY packages/shared/package.json packages/shared/
 COPY packages/config/package.json packages/config/
 RUN npm ci --omit=dev --ignore-scripts
 
+# drizzle-kit + tsx needed for DB migrations at startup
+RUN npm install -g drizzle-kit tsx
+
 # Copy built API
 COPY --from=builder /app/apps/api/dist apps/api/dist
 COPY --from=builder /app/packages/db packages/db
@@ -41,17 +44,16 @@ COPY --from=builder /app/packages/shared packages/shared
 COPY --from=builder /app/packages/config packages/config
 COPY --from=builder /app/tsconfig.base.json tsconfig.base.json
 
-# Copy built frontend (served by API or a reverse proxy)
+# Copy built frontend (served by API in production)
 COPY --from=builder /app/apps/web/dist apps/web/dist
 
-# DB migrations
-COPY packages/db/migrations packages/db/migrations
-COPY packages/db/drizzle.config.ts packages/db/
+# Startup script
+COPY start.sh ./
+RUN chmod +x start.sh
 
 ENV NODE_ENV=production
 ENV PORT=3001
 
 EXPOSE 3001
 
-# Start the API server (which also runs all schedulers)
-CMD ["node", "apps/api/dist/index.js"]
+CMD ["./start.sh"]
