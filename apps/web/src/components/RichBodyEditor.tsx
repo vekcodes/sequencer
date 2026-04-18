@@ -123,7 +123,12 @@ export function RichBodyEditor({
   placeholder,
 }: Props) {
   const editorRef = useRef<HTMLDivElement>(null)
-  const lastValueRef = useRef(value)
+  // Sentinel — must not equal any real string so the first effect run after
+  // mount always paints innerHTML, even when `value` is already populated
+  // from a server fetch. Using `useRef(value)` here silently skipped the
+  // initial paint and caused saved bodies to render blank, which led users
+  // to overwrite them with partial edits.
+  const lastValueRef = useRef<string | null>(null)
   const [showVarMenu, setShowVarMenu] = useState(false)
   const varWrapRef = useRef<HTMLDivElement>(null)
 
