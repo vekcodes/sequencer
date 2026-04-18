@@ -34,6 +34,8 @@ export type RowError = {
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export function parseCsvHeaders(csvText: string): string[] {
+  // Only the header row is trimmed — body cells preserve whitespace + newlines
+  // so multi-line custom-var cells (e.g. pre-written email copy) survive intact.
   const records = parse(csvText, {
     columns: false,
     skip_empty_lines: true,
@@ -42,14 +44,17 @@ export function parseCsvHeaders(csvText: string): string[] {
     relax_column_count: true,
     relax_quotes: true,
   }) as string[][];
-  return records[0] ?? [];
+  return (records[0] ?? []).map((h) => (h ?? '').trim());
 }
 
 export function parseCsvRows(csvText: string, hasHeader: boolean): string[][] {
   return parse(csvText, {
     columns: false,
     skip_empty_lines: true,
-    trim: true,
+    // trim=false: cells with intentional line breaks (email-copy variables)
+    // keep their internal \n and indentation. Per-field trimming is applied
+    // selectively in validateAndMap only to identity-style fields.
+    trim: false,
     from_line: hasHeader ? 2 : 1,
     relax_column_count: true,
     relax_quotes: true,
@@ -111,19 +116,34 @@ export function validateAndMap(
     for (const [colStr, field] of Object.entries(mapping)) {
       if (field === null || field === 'email') continue;
       const colIdx = Number(colStr);
-      const raw = row[colIdx];
-      const value = (raw ?? '').trim();
-      if (!value) continue;
+      const raw = row[colIdx] ?? '';
 
-      if (field === 'first_name') parsed.firstName = value;
-      else if (field === 'last_name') parsed.lastName = value;
-      else if (field === 'company') parsed.company = value;
-      else if (field === 'title') parsed.title = value;
-      else if (field === 'phone') parsed.phone = value;
-      else if (field === 'timezone') parsed.timezone = value;
-      else if (field.startsWith('custom_var:')) {
+      // Identity-style fields get trimmed; custom_var values keep their
+      // original whitespace + line breaks (important for multi-line email
+      // copy stored as a custom variable).
+      if (field === 'first_name') {
+        const v = raw.trim();
+        if (v) parsed.firstName = v;
+      } else if (field === 'last_name') {
+        const v = raw.trim();
+        if (v) parsed.lastName = v;
+      } else if (field === 'company') {
+        const v = raw.trim();
+        if (v) parsed.company = v;
+      } else if (field === 'title') {
+        const v = raw.trim();
+        if (v) parsed.title = v;
+      } else if (field === 'phone') {
+        const v = raw.trim();
+        if (v) parsed.phone = v;
+      } else if (field === 'timezone') {
+        const v = raw.trim();
+        if (v) parsed.timezone = v;
+      } else if (field.startsWith('custom_var:')) {
         const key = field.slice('custom_var:'.length);
-        if (key) parsed.customVariables[key] = value;
+        // Only skip if the cell is entirely empty/whitespace — a cell with
+        // "   \n line 1\n line 2  " is meaningful content and should be kept.
+        if (key && raw.trim().length > 0) parsed.customVariables[key] = raw;
       }
     }
 

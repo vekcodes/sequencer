@@ -10,7 +10,8 @@ export function CampaignSettingsEditor({ campaign, onSaved }: Props) {
     campaign.maxNewLeadsPerDay,
   )
   const [plainText, setPlainText] = useState(campaign.plainText)
-  const [openTracking, setOpenTracking] = useState(campaign.openTracking)
+  // Open tracking is permanently disabled — cold-email deliverability over vanity metrics.
+  const openTracking = false
   const [clickTracking, setClickTracking] = useState(campaign.clickTracking)
   const [canUnsubscribe, setCanUnsubscribe] = useState(campaign.canUnsubscribe)
   const [useLeadTimezone, setUseLeadTimezone] = useState(campaign.useLeadTimezone)
@@ -49,7 +50,6 @@ export function CampaignSettingsEditor({ campaign, onSaved }: Props) {
   const score =
     100 -
     (plainText ? 0 : 15) -
-    (openTracking ? 10 : 0) -
     (clickTracking ? 20 : 0) -
     (canUnsubscribe ? 0 : 10) -
     (useLeadTimezone ? 0 : 5)
@@ -122,12 +122,6 @@ export function CampaignSettingsEditor({ campaign, onSaved }: Props) {
             hint="HTML+images triggers Gmail promo tab. Recommended."
             value={plainText}
             onChange={setPlainText}
-          />
-          <Toggle
-            label="Open tracking"
-            hint="Pixels hurt deliverability. Recommended OFF."
-            value={openTracking}
-            onChange={setOpenTracking}
           />
           <Toggle
             label="Click tracking"

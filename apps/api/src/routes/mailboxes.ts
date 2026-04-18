@@ -135,6 +135,7 @@ const WarmupBody = z.object({
   warmupEnabled: z.boolean().optional(),
   warmupDailyLimit: z.number().int().min(0).max(50).optional(),
   smartAdjustEnabled: z.boolean().optional(),
+  dailyLimitTarget: z.number().int().min(1).max(500).optional(),
 });
 
 mailboxRoutes.patch('/:id/warmup', async (c) => {

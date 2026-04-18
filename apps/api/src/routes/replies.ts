@@ -5,6 +5,8 @@ import {
   getReply,
   updateReplyFlags,
   getReplyCounts,
+  replyToThread,
+  ReplyComposeError,
 } from '../services/replies';
 import { requireAuth, type AuthVariables } from '../middleware/auth';
 
@@ -16,6 +18,10 @@ const PatchBody = z.object({
   read: z.boolean().optional(),
   starred: z.boolean().optional(),
   archived: z.boolean().optional(),
+});
+
+const ReplyBody = z.object({
+  body: z.string().min(1).max(50_000),
 });
 
 function parseId(raw: string | undefined): number | null {
@@ -36,12 +42,15 @@ repliesRoutes.get('/', async (c) => {
     | 'starred'
     | 'archived';
   const search = c.req.query('q') ?? undefined;
+  const mailboxIdRaw = c.req.query('mailboxId');
+  const mailboxId = mailboxIdRaw ? Number.parseInt(mailboxIdRaw, 10) : undefined;
   const result = await listReplies({
     workspaceId: user.workspaceId,
     page,
     limit,
     filter,
     search,
+    mailboxId: Number.isFinite(mailboxId) && mailboxId! > 0 ? mailboxId : undefined,
   });
   return c.json(result);
 });
@@ -71,4 +80,23 @@ repliesRoutes.patch('/:id', async (c) => {
   const updated = await updateReplyFlags(id, user.workspaceId, parsed.data);
   if (!updated) return c.json({ error: 'not_found' }, 404);
   return c.json({ reply: updated });
+});
+
+repliesRoutes.post('/:id/reply', async (c) => {
+  const user = c.get('user')!;
+  const id = parseId(c.req.param('id'));
+  if (id === null) return c.json({ error: 'invalid_id' }, 400);
+  const body = await c.req.json().catch(() => null);
+  const parsed = ReplyBody.safeParse(body);
+  if (!parsed.success) return c.json({ error: 'invalid_input' }, 400);
+  try {
+    const sent = await replyToThread(id, user.workspaceId, parsed.data.body);
+    const full = await getReply(id, user.workspaceId);
+    return c.json({ reply: full, gmailMessageId: sent.gmailMessageId });
+  } catch (e) {
+    if (e instanceof ReplyComposeError) {
+      return c.json({ error: e.code, message: e.message }, e.status as 400 | 404 | 409);
+    }
+    throw e;
+  }
 });

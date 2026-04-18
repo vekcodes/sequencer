@@ -8,6 +8,7 @@ import {
   pauseMailbox,
   recomputeMailboxHealth,
   resumeMailbox,
+  updateMailboxWarmup,
   type MailboxHealthSnapshot,
   type MailboxView,
 } from '../lib/mailboxes'
@@ -198,6 +199,9 @@ export function MailboxDetailPage() {
             />
           </div>
 
+          <h2 className="section-title">Sending limits &amp; warmup</h2>
+          <LimitsEditor mailbox={mailbox} onSaved={refresh} />
+
           <h2 className="section-title">Health score (last 30 days)</h2>
           <div className="sparkline-card">
             <Sparkline
@@ -258,6 +262,108 @@ function Tile({
       <span className="tile-label">{label}</span>
       <span className="tile-value">{value}</span>
       {hint && <span className="tile-hint">{hint}</span>}
+    </div>
+  )
+}
+
+function LimitsEditor({
+  mailbox,
+  onSaved,
+}: {
+  mailbox: MailboxView
+  onSaved: () => Promise<void> | void
+}) {
+  const [dailyLimitTarget, setDailyLimitTarget] = useState(mailbox.dailyLimitTarget)
+  const [warmupEnabled, setWarmupEnabled] = useState(mailbox.warmupEnabled)
+  const [warmupDailyLimit, setWarmupDailyLimit] = useState(mailbox.warmupDailyLimit)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function onSave() {
+    setSaving(true)
+    setError(null)
+    try {
+      await updateMailboxWarmup(mailbox.id, {
+        dailyLimitTarget,
+        warmupEnabled,
+        warmupDailyLimit,
+      })
+      await onSaved()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const dirty =
+    dailyLimitTarget !== mailbox.dailyLimitTarget ||
+    warmupEnabled !== mailbox.warmupEnabled ||
+    warmupDailyLimit !== mailbox.warmupDailyLimit
+
+  return (
+    <div className="auth-card" style={{ maxWidth: 640 }}>
+      <label>
+        <span>Daily sending limit (target)</span>
+        <input
+          type="number"
+          min={1}
+          max={500}
+          value={dailyLimitTarget}
+          onChange={(e) => setDailyLimitTarget(Number(e.target.value) || 1)}
+        />
+        <small>
+          Hard cap on real campaign sends per day. Ramp pushes the current
+          allowance up toward this target as deliverability stays clean.
+        </small>
+      </label>
+
+      <label className="inline-checkbox" style={{ marginTop: '1rem' }}>
+        <input
+          type="checkbox"
+          checked={warmupEnabled}
+          onChange={(e) => setWarmupEnabled(e.target.checked)}
+        />
+        <span>
+          <strong>Enable warmup</strong>
+          <br />
+          <small>
+            Workspace mailboxes send conversational messages to each other and
+            auto-reply. Inbound warmup mail gets rescued from Spam, marked
+            Important, and replied to on the same thread — this is what builds
+            Gmail sender reputation.
+          </small>
+        </span>
+      </label>
+
+      {warmupEnabled && (
+        <label>
+          <span>Warmup sends / day</span>
+          <input
+            type="number"
+            min={0}
+            max={50}
+            value={warmupDailyLimit}
+            onChange={(e) => setWarmupDailyLimit(Number(e.target.value) || 0)}
+          />
+          <small>
+            Counted against the daily cap above. Recommended default: 3 (week 1)
+            ramping to 20–25 (week 4+).
+          </small>
+        </label>
+      )}
+
+      <div className="actions" style={{ marginTop: '1rem' }}>
+        <button
+          type="button"
+          className="btn-primary"
+          disabled={saving || !dirty}
+          onClick={onSave}
+        >
+          {saving ? 'Saving…' : 'Save'}
+        </button>
+        {error && <span className="inline-form__error">{error}</span>}
+      </div>
     </div>
   )
 }

@@ -5,10 +5,12 @@ import {
   getReplyCounts,
   getReply,
   updateReplyFlags,
+  sendReplyToThread,
   type ReplyView,
   type ReplyFilter,
 } from '../lib/replies'
 import { ApiError } from '../lib/api'
+import { listMailboxes, type MailboxView } from '../lib/mailboxes'
 
 const FILTERS: Array<{ key: ReplyFilter; label: string }> = [
   { key: 'all', label: 'All' },
@@ -32,6 +34,15 @@ export function MasterInboxPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [mailboxes, setMailboxes] = useState<MailboxView[]>([])
+  const [mailboxFilter, setMailboxFilter] = useState<number | 'all'>('all')
+  const [replyDraft, setReplyDraft] = useState('')
+  const [sending, setSending] = useState(false)
+  const [sendError, setSendError] = useState<string | null>(null)
+
+  useEffect(() => {
+    listMailboxes().then(setMailboxes).catch(() => {})
+  }, [])
 
   // Debounce search input by 400ms
   useEffect(() => {
@@ -40,15 +51,21 @@ export function MasterInboxPage() {
     return () => { if (searchTimer.current) clearTimeout(searchTimer.current) }
   }, [search])
 
-  // Reset to page 1 when filter or search changes
-  useEffect(() => { setPage(1) }, [filter, debouncedSearch])
+  // Reset to page 1 when filter, search, or sender filter changes
+  useEffect(() => { setPage(1) }, [filter, debouncedSearch, mailboxFilter])
 
   const loadList = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
       const [list, cs] = await Promise.all([
-        listReplies({ page, filter, q: debouncedSearch || undefined, limit: 50 }),
+        listReplies({
+          page,
+          filter,
+          q: debouncedSearch || undefined,
+          mailboxId: mailboxFilter === 'all' ? undefined : mailboxFilter,
+          limit: 50,
+        }),
         getReplyCounts(),
       ])
       setReplies(list.replies)
@@ -59,9 +76,15 @@ export function MasterInboxPage() {
     } finally {
       setLoading(false)
     }
-  }, [filter, debouncedSearch, page])
+  }, [filter, debouncedSearch, page, mailboxFilter])
 
   useEffect(() => { loadList() }, [loadList])
+
+  // Reset reply composer state whenever a different reply is selected
+  useEffect(() => {
+    setReplyDraft('')
+    setSendError(null)
+  }, [selectedId])
 
   // Fetch full reply on selection
   useEffect(() => {
@@ -89,6 +112,28 @@ export function MasterInboxPage() {
       setReplies((prev) => prev.map((x) => (x.id === r.id ? updated.reply : x)))
       if (selected?.id === r.id) setSelected(updated.reply)
     } catch { /* swallow */ }
+  }
+
+  async function onSendReply() {
+    if (!selected || !replyDraft.trim() || sending) return
+    setSending(true)
+    setSendError(null)
+    try {
+      await sendReplyToThread(selected.id, { body: replyDraft })
+      setReplyDraft('')
+      // Refresh the thread view (reply row stays; composer clears).
+      await loadList()
+    } catch (e) {
+      setSendError(
+        e instanceof ApiError
+          ? `Send failed (${e.status})`
+          : e instanceof Error
+            ? e.message
+            : 'Send failed',
+      )
+    } finally {
+      setSending(false)
+    }
   }
 
   async function toggleArchive(r: ReplyView) {
@@ -137,6 +182,22 @@ export function MasterInboxPage() {
                 </button>
               ))}
             </div>
+            <select
+              className="inbox__search"
+              style={{ maxWidth: 220 }}
+              value={mailboxFilter === 'all' ? '' : String(mailboxFilter)}
+              onChange={(e) =>
+                setMailboxFilter(e.target.value ? Number(e.target.value) : 'all')
+              }
+              title="Filter by sender mailbox"
+            >
+              <option value="">All senders</option>
+              {mailboxes.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.email}
+                </option>
+              ))}
+            </select>
             <input
               type="search"
               className="inbox__search"
@@ -277,6 +338,47 @@ export function MasterInboxPage() {
                   <pre className="inbox__detail-body">
                     {detailBody ?? selected.snippet}
                   </pre>
+                  <div
+                    style={{
+                      borderTop: '1px solid var(--border, #eee)',
+                      padding: '0.75rem 1rem',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '0.5rem',
+                    }}
+                  >
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>
+                      Replying from <strong>{selected.mailboxEmail}</strong> in the same Gmail thread.
+                    </div>
+                    <textarea
+                      placeholder="Type your reply..."
+                      value={replyDraft}
+                      onChange={(e) => setReplyDraft(e.target.value)}
+                      rows={6}
+                      style={{
+                        width: '100%',
+                        fontFamily: 'inherit',
+                        fontSize: '0.9rem',
+                        padding: '0.5rem',
+                      }}
+                      disabled={sending}
+                    />
+                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                      <button
+                        type="button"
+                        className="btn btn--primary btn--small"
+                        disabled={sending || !replyDraft.trim()}
+                        onClick={onSendReply}
+                      >
+                        {sending ? 'Sending…' : 'Send reply'}
+                      </button>
+                      {sendError && (
+                        <span style={{ color: 'var(--error)', fontSize: '0.8rem' }}>
+                          {sendError}
+                        </span>
+                      )}
+                    </div>
+                  </div>
                 </article>
               )}
             </div>

@@ -116,6 +116,41 @@ export const mailboxDailyUsage = pgTable(
   }),
 );
 
+// Warmup engagement log. Every inbound message from another warmup-enabled
+// mailbox in the same workspace creates one of these rows. A background tick
+// picks up rows with state='pending' where reply_at <= now() and sends a
+// conversational auto-reply on the same thread — this is what actually moves
+// the deliverability needle for new inboxes.
+export const warmupEngagementState = pgEnum('warmup_engagement_state', [
+  'pending',
+  'replied',
+  'skipped',
+]);
+
+export const warmupEngagement = pgTable('warmup_engagement', {
+  id: serial('id').primaryKey(),
+  workspaceId: integer('workspace_id')
+    .notNull()
+    .references(() => workspace.id, { onDelete: 'cascade' }),
+  // The mailbox that RECEIVED the warmup message and will send the reply.
+  mailboxId: integer('mailbox_id')
+    .notNull()
+    .references(() => mailbox.id, { onDelete: 'cascade' }),
+  // The other workspace mailbox that sent the warmup message in the first place.
+  partnerMailboxId: integer('partner_mailbox_id')
+    .notNull()
+    .references(() => mailbox.id, { onDelete: 'cascade' }),
+  gmailThreadId: text('gmail_thread_id').notNull(),
+  gmailMessageId: text('gmail_message_id').notNull(),
+  subject: text('subject'),
+  bodyText: text('body_text'),
+  state: warmupEngagementState('state').default('pending').notNull(),
+  rescuedFromSpam: boolean('rescued_from_spam').default(false).notNull(),
+  replyAt: timestamp('reply_at', { withTimezone: true }).notNull(),
+  repliedAt: timestamp('replied_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
 // Append-only daily snapshot for the health dashboard's trend charts.
 export const mailboxHealthSnapshot = pgTable(
   'mailbox_health_snapshot',

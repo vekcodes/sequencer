@@ -17,11 +17,28 @@ export type MailboxView = {
   dmarcOk: boolean | null
   mxOk: boolean | null
   warmupEnabled: boolean
+  warmupDailyLimit: number
+  smartAdjustEnabled: boolean
   pauseReason: string | null
   restingUntil: string | null
   rampStartedAt: string
   createdAt: string
   updatedAt: string
+}
+
+export function updateMailboxWarmup(
+  id: number,
+  patch: {
+    warmupEnabled?: boolean
+    warmupDailyLimit?: number
+    smartAdjustEnabled?: boolean
+    dailyLimitTarget?: number
+  },
+) {
+  return api<{ mailbox: MailboxView }>(`/api/mailboxes/${id}/warmup`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  }).then((r) => r.mailbox)
 }
 
 export function listMailboxes() {

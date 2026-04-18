@@ -4,6 +4,9 @@
 import { and, eq, desc, sql, inArray, or, ilike } from 'drizzle-orm';
 import { reply, lead, campaignLead, campaign, mailbox } from '@ces/db';
 import { db } from '../lib/db';
+import { sendGmailMessage } from '../lib/gmail-send';
+import { getMailboxAccessToken } from './mailbox';
+import { fetchGmailMessage, getHeader } from '../lib/google';
 
 export type ReplyView = {
   id: number;
@@ -69,6 +72,8 @@ export type ListRepliesInput = {
   limit: number;
   filter?: 'all' | 'unread' | 'interested' | 'starred' | 'archived';
   search?: string;
+  /** Restrict to replies received on a specific sender mailbox. */
+  mailboxId?: number;
 };
 
 export async function listReplies(input: ListRepliesInput): Promise<{
@@ -84,6 +89,7 @@ export async function listReplies(input: ListRepliesInput): Promise<{
   if (input.filter === 'starred') conditions.push(eq(reply.starred, true));
   if (input.filter === 'archived') conditions.push(eq(reply.archived, true));
   if (input.filter !== 'archived') conditions.push(eq(reply.archived, false));
+  if (input.mailboxId) conditions.push(eq(reply.mailboxId, input.mailboxId));
 
   if (input.search) {
     const q = `%${input.search}%`;
@@ -203,3 +209,96 @@ export async function getReplyCounts(workspaceId: number): Promise<{
 
 // silence unused linter
 void inArray;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Reply to thread (master inbox composer)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export class ReplyComposeError extends Error {
+  code: string;
+  status: number;
+  constructor(code: string, status: number, message?: string) {
+    super(message ?? code);
+    this.code = code;
+    this.status = status;
+  }
+}
+
+/**
+ * Sends a reply in the original Gmail thread from the same mailbox that
+ * received the reply (which is the same mailbox we used for the first cold
+ * email — thread stickiness is enforced upstream in the sender-worker). Plain
+ * text only, threadId + In-Reply-To set so Gmail keeps it in the same thread
+ * and other MUAs thread it too.
+ */
+export async function replyToThread(
+  replyId: number,
+  workspaceId: number,
+  bodyText: string,
+): Promise<{ gmailMessageId: string; threadId: string }> {
+  if (!bodyText.trim()) {
+    throw new ReplyComposeError('empty_body', 400, 'Reply body is required');
+  }
+
+  const [row] = await db
+    .select({
+      r: reply,
+      mb: mailbox,
+      cl: campaignLead,
+    })
+    .from(reply)
+    .innerJoin(mailbox, eq(mailbox.id, reply.mailboxId))
+    .leftJoin(campaignLead, eq(campaignLead.id, reply.campaignLeadId))
+    .where(and(eq(reply.id, replyId), eq(reply.workspaceId, workspaceId)))
+    .limit(1);
+  if (!row) {
+    throw new ReplyComposeError('not_found', 404, 'Reply not found');
+  }
+  if (row.mb.healthStatus !== 'connected') {
+    throw new ReplyComposeError(
+      'mailbox_not_connected',
+      409,
+      `Sender mailbox ${row.mb.email} is ${row.mb.healthStatus}`,
+    );
+  }
+  if (!row.r.gmailThreadId) {
+    throw new ReplyComposeError(
+      'no_thread',
+      409,
+      'Original message has no Gmail thread id',
+    );
+  }
+
+  const accessToken = await getMailboxAccessToken(row.mb.id);
+
+  // Pull the RFC 822 Message-ID of the message we're replying to, so other
+  // clients can thread correctly. Fall back to the enrollment's stored
+  // first_message_id if the fetch fails.
+  let inReplyTo: string | null = null;
+  if (row.r.gmailMessageId) {
+    try {
+      const msg = await fetchGmailMessage(accessToken, row.r.gmailMessageId);
+      inReplyTo = getHeader(msg, 'Message-ID') ?? getHeader(msg, 'Message-Id');
+    } catch {
+      // fall through
+    }
+  }
+  if (!inReplyTo && row.cl?.firstMessageId) {
+    inReplyTo = row.cl.firstMessageId;
+  }
+
+  const subjectBase = row.r.subject ?? '';
+  const subject = /^re:\s/i.test(subjectBase) ? subjectBase : `Re: ${subjectBase}`;
+
+  const sent = await sendGmailMessage({
+    accessToken,
+    from: { email: row.mb.email, displayName: row.mb.displayName },
+    to: row.r.fromEmail,
+    subject,
+    bodyText,
+    inReplyToMessageId: inReplyTo,
+    threadId: row.r.gmailThreadId,
+  });
+
+  return { gmailMessageId: sent.id, threadId: sent.threadId };
+}

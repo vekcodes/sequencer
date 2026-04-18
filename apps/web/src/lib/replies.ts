@@ -37,14 +37,26 @@ export async function listReplies(params: {
   limit?: number
   filter?: ReplyFilter
   q?: string
+  mailboxId?: number
 }): Promise<{ replies: ReplyView[]; total: number; page: number; limit: number }> {
   const qs = new URLSearchParams()
   if (params.page) qs.set('page', String(params.page))
   if (params.limit) qs.set('limit', String(params.limit))
   if (params.filter) qs.set('filter', params.filter)
   if (params.q) qs.set('q', params.q)
+  if (params.mailboxId) qs.set('mailboxId', String(params.mailboxId))
   const query = qs.toString() ? `?${qs.toString()}` : ''
   return api(`/api/replies${query}`)
+}
+
+export async function sendReplyToThread(
+  id: number,
+  body: { body: string },
+): Promise<{ reply: ReplyView; gmailMessageId: string }> {
+  return api(`/api/replies/${id}/reply`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
 }
 
 export async function getReplyCounts(): Promise<{

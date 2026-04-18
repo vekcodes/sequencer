@@ -236,6 +236,7 @@ export async function updateMailboxWarmup(
     warmupEnabled?: boolean;
     warmupDailyLimit?: number;
     smartAdjustEnabled?: boolean;
+    dailyLimitTarget?: number;
   },
 ): Promise<MailboxRow | null> {
   const set: Record<string, unknown> = { updatedAt: new Date() };
@@ -247,6 +248,12 @@ export async function updateMailboxWarmup(
   }
   if (patch.smartAdjustEnabled !== undefined)
     set.smartAdjustEnabled = patch.smartAdjustEnabled;
+  if (patch.dailyLimitTarget !== undefined) {
+    // Google's Gmail external-recipient hard ceiling is 2000/day; anything
+    // near that is almost certainly a mistake, so cap at 500 — well above
+    // what a healthy cold-email mailbox should ever send.
+    set.dailyLimitTarget = Math.max(1, Math.min(500, patch.dailyLimitTarget));
+  }
 
   const updated = await db
     .update(mailbox)

@@ -14,17 +14,19 @@
 // via the `effectiveDailyLimit` calculation, but we also increment the
 // dedicated counter so the UI can distinguish warmup from real sends.
 
-import { and, eq, ne, sql } from 'drizzle-orm';
+import { and, eq, lte, ne, sql } from 'drizzle-orm';
 import {
   mailbox,
   emailEvent,
   mailboxDailyUsage,
   scheduledEmail,
+  warmupEngagement,
 } from '@ces/db';
 import { db } from '../lib/db';
 import { sendGmailMessage } from '../lib/gmail-send';
 import { getMailboxAccessToken } from './mailbox';
 import { isGoogleOAuthConfigured } from '../lib/env';
+import { modifyGmailMessageLabels, type GmailMessage } from '../lib/google';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Message templates — benign, conversational, looks-like-a-human content.
@@ -302,3 +304,231 @@ export async function runWarmupSweep(): Promise<{
 
 // silence lints for type-only re-uses
 void scheduledEmail;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Engagement loop — receive + rescue + reply
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// When a warmup message lands at another workspace mailbox, the reply-ingestion
+// path calls handleWarmupInbound below. We:
+//   (a) rescue it out of SPAM if Gmail filed it there,
+//   (b) add IMPORTANT + remove UNREAD — the two label signals Gmail's
+//       Postmaster Tools weights most heavily,
+//   (c) record a warmup_engagement row with a random reply_at in 30min–12h,
+//       staggered so the pool doesn't look synthetic.
+//
+// A separate tick (runWarmupReplyTick) picks up due engagements and sends the
+// reply in the same Gmail thread. Target reply rate ~40% — not every inbound
+// warmup gets answered, because a 100% reply rate is a giveaway.
+
+const REPLY_PROBABILITY = 0.4;
+const MIN_REPLY_DELAY_MS = 30 * 60 * 1000; // 30 min
+const MAX_REPLY_DELAY_MS = 12 * 60 * 60 * 1000; // 12 h
+
+const WARMUP_REPLY_TEMPLATES = [
+  'Thanks for the note — good thinking on that. Will circle back next week.',
+  'Got it, appreciate you flagging this. Sounds good on the approach.',
+  'Makes sense. Happy to chat more when you have time.',
+  'Nice, thanks for the update. Let me know if anything changes.',
+  "Agreed — that's the right call. Talk soon.",
+  "Perfect, appreciate it. I'll keep you posted.",
+  "Thanks! Works for me. Let's pick it up next week.",
+  "Got it, thanks for the heads-up. I'm on it.",
+];
+
+function pickReplyTemplate(): string {
+  return (
+    WARMUP_REPLY_TEMPLATES[
+      Math.floor(Math.random() * WARMUP_REPLY_TEMPLATES.length)
+    ] ?? WARMUP_REPLY_TEMPLATES[0]!
+  );
+}
+
+export type WarmupInboundInput = {
+  receiverMailbox: typeof mailbox.$inferSelect;
+  partnerMailbox: typeof mailbox.$inferSelect;
+  gmailMessage: GmailMessage;
+  subject: string;
+  bodyText: string;
+};
+
+/**
+ * Called by reply-ingestion for every inbound message from another
+ * warmup-enabled mailbox in the same workspace. Idempotent: repeated calls
+ * for the same gmail_message_id are deduped.
+ */
+export async function handleWarmupInbound(
+  input: WarmupInboundInput,
+): Promise<void> {
+  const { receiverMailbox, partnerMailbox, gmailMessage } = input;
+
+  // Dedupe — an engagement row per inbound message.
+  const [existing] = await db
+    .select({ id: warmupEngagement.id })
+    .from(warmupEngagement)
+    .where(
+      and(
+        eq(warmupEngagement.mailboxId, receiverMailbox.id),
+        eq(warmupEngagement.gmailMessageId, gmailMessage.id),
+      ),
+    )
+    .limit(1);
+  if (existing) return;
+
+  // Rescue from SPAM + mark engagement labels. Best-effort — if Gmail returns
+  // an error we still record the engagement so the reply still gets sent.
+  let rescued = false;
+  try {
+    const labelIds = gmailMessage.labelIds ?? [];
+    const accessToken = await getMailboxAccessToken(receiverMailbox.id);
+    const remove: string[] = [];
+    const add: string[] = ['IMPORTANT'];
+    if (labelIds.includes('SPAM')) {
+      remove.push('SPAM');
+      add.push('INBOX');
+      rescued = true;
+    }
+    if (labelIds.includes('UNREAD')) remove.push('UNREAD');
+    if (labelIds.includes('CATEGORY_PROMOTIONS')) {
+      remove.push('CATEGORY_PROMOTIONS');
+    }
+    await modifyGmailMessageLabels(accessToken, gmailMessage.id, { add, remove });
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      '[warmup] label modify failed for',
+      receiverMailbox.email,
+      e instanceof Error ? e.message : e,
+    );
+  }
+
+  // Decide whether to reply (probabilistic, ~40%). If we're not replying,
+  // record the engagement as 'skipped' so reporting is still accurate.
+  const willReply = Math.random() < REPLY_PROBABILITY;
+  const state: 'pending' | 'skipped' = willReply ? 'pending' : 'skipped';
+  const delay =
+    MIN_REPLY_DELAY_MS +
+    Math.floor(Math.random() * (MAX_REPLY_DELAY_MS - MIN_REPLY_DELAY_MS));
+  const replyAt = new Date(Date.now() + delay);
+
+  await db.insert(warmupEngagement).values({
+    workspaceId: receiverMailbox.workspaceId,
+    mailboxId: receiverMailbox.id,
+    partnerMailboxId: partnerMailbox.id,
+    gmailThreadId: gmailMessage.threadId,
+    gmailMessageId: gmailMessage.id,
+    subject: input.subject,
+    bodyText: input.bodyText.slice(0, 2000),
+    state,
+    rescuedFromSpam: rescued,
+    replyAt,
+  });
+}
+
+export type WarmupReplyTickResult = {
+  attempted: number;
+  sent: number;
+  errors: string[];
+};
+
+/**
+ * Processes due warmup_engagement rows. Sends a short conversational reply in
+ * the same Gmail thread using the receiver mailbox (which is the other end of
+ * the pool). Uses threadId + In-Reply-To so Gmail threads it correctly.
+ */
+export async function runWarmupReplyTick(): Promise<WarmupReplyTickResult> {
+  const out: WarmupReplyTickResult = { attempted: 0, sent: 0, errors: [] };
+
+  const due = await db
+    .select()
+    .from(warmupEngagement)
+    .where(
+      and(
+        eq(warmupEngagement.state, 'pending'),
+        lte(warmupEngagement.replyAt, new Date()),
+      ),
+    )
+    .limit(50);
+
+  for (const eng of due) {
+    out.attempted += 1;
+    try {
+      const [mbRow] = await db
+        .select()
+        .from(mailbox)
+        .where(eq(mailbox.id, eng.mailboxId))
+        .limit(1);
+      const [partnerRow] = await db
+        .select()
+        .from(mailbox)
+        .where(eq(mailbox.id, eng.partnerMailboxId))
+        .limit(1);
+      if (!mbRow || !partnerRow) {
+        await db
+          .update(warmupEngagement)
+          .set({ state: 'skipped' })
+          .where(eq(warmupEngagement.id, eng.id));
+        continue;
+      }
+      if (
+        mbRow.healthStatus !== 'connected' ||
+        !mbRow.warmupEnabled ||
+        partnerRow.healthStatus !== 'connected'
+      ) {
+        await db
+          .update(warmupEngagement)
+          .set({ state: 'skipped' })
+          .where(eq(warmupEngagement.id, eng.id));
+        continue;
+      }
+
+      if (!isGoogleOAuthConfigured()) {
+        await db
+          .update(warmupEngagement)
+          .set({ state: 'skipped' })
+          .where(eq(warmupEngagement.id, eng.id));
+        continue;
+      }
+
+      const accessToken = await getMailboxAccessToken(mbRow.id);
+      const subjectBase = eng.subject ?? '';
+      const subject = /^re:\s/i.test(subjectBase)
+        ? subjectBase
+        : `Re: ${subjectBase}`;
+
+      const sent = await sendGmailMessage({
+        accessToken,
+        from: { email: mbRow.email, displayName: mbRow.displayName },
+        to: partnerRow.email,
+        subject,
+        bodyText: pickReplyTemplate(),
+        threadId: eng.gmailThreadId,
+      });
+
+      await db
+        .update(warmupEngagement)
+        .set({ state: 'replied', repliedAt: new Date() })
+        .where(eq(warmupEngagement.id, eng.id));
+
+      await db.insert(emailEvent).values({
+        workspaceId: mbRow.workspaceId,
+        mailboxId: mbRow.id,
+        type: 'sent',
+        payload: {
+          warmup: true,
+          warmup_reply: true,
+          to: partnerRow.email,
+          gmail_message_id: sent.id,
+          gmail_thread_id: sent.threadId,
+          rescued_from_spam: eng.rescuedFromSpam,
+        },
+      });
+
+      out.sent += 1;
+    } catch (e) {
+      out.errors.push(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  return out;
+}

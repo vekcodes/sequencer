@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { AppShell } from '../components/AppShell'
 import {
   createCampaign,
+  deleteCampaign,
   listCampaigns,
   type CampaignStatus,
   type CampaignView,
@@ -41,6 +42,21 @@ export function CampaignsPage() {
   useEffect(() => {
     refresh()
   }, [])
+
+  async function onDelete(c: CampaignView) {
+    if (
+      !confirm(
+        `Permanently delete campaign "${c.name}"?\n\nThis will remove the campaign plus every enrollment, queued send, and event tied to it. Cannot be undone.`,
+      )
+    )
+      return
+    try {
+      await deleteCampaign(c.id)
+      await refresh()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Delete failed')
+    }
+  }
 
   async function onCreate(e: FormEvent) {
     e.preventDefault()
@@ -123,6 +139,7 @@ export function CampaignsPage() {
               <th>Senders</th>
               <th>Leads</th>
               <th>Created</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
@@ -141,6 +158,16 @@ export function CampaignsPage() {
                 <td>{c.leadCount.toLocaleString()}</td>
                 <td className="dim">
                   {new Date(c.createdAt).toLocaleDateString()}
+                </td>
+                <td>
+                  <button
+                    type="button"
+                    className="row-action"
+                    title="Permanently delete campaign"
+                    onClick={() => onDelete(c)}
+                  >
+                    ✕
+                  </button>
                 </td>
               </tr>
             ))}

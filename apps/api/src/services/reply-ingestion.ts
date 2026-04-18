@@ -33,6 +33,7 @@ import {
 import { getMailboxAccessToken } from './mailbox';
 import { dispatchEvent } from './webhooks';
 import { classifyWithLlm, isLlmClassifierAvailable } from '../lib/llm-classifier';
+import { handleWarmupInbound } from './warmup';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Classification
@@ -265,30 +266,69 @@ export async function ingestMessage(
   const body = extractPlainBody(msg);
   const receivedAt = new Date(Number(msg.internalDate || Date.now()));
 
-  // Ignore messages we sent to ourselves during warmup — same-from-as-us.
+  // Ignore messages we sent to ourselves.
   if (from.email.toLowerCase() === mailboxRow.email.toLowerCase()) {
     return { replyId: null, classification: 'unknown', skipped: true, reason: 'self_loopback' };
   }
 
+  // Warmup partner mail: route to the warmup engagement handler (it schedules
+  // an auto-reply + rescues from SPAM + marks IMPORTANT). Never saved to the
+  // master inbox — warmup traffic is not a lead reply.
+  const [senderMailbox] = await db
+    .select()
+    .from(mailbox)
+    .where(
+      and(
+        eq(mailbox.workspaceId, mailboxRow.workspaceId),
+        eq(mailbox.email, from.email.toLowerCase()),
+      ),
+    )
+    .limit(1);
+  if (senderMailbox && senderMailbox.warmupEnabled) {
+    await handleWarmupInbound({
+      receiverMailbox: mailboxRow,
+      partnerMailbox: senderMailbox,
+      gmailMessage: msg,
+      subject,
+      bodyText: body,
+    });
+    return {
+      replyId: null,
+      classification: 'unknown',
+      skipped: true,
+      reason: 'warmup_inbound',
+    };
+  }
+
+  // Tracked leads only: resolve enrollment FIRST. Untracked mail is dropped
+  // before it hits the reply table or the LLM — master inbox shows only
+  // replies from leads we actively sent to, and we don't burn Claude credits
+  // classifying newsletters or random inbox noise.
   const lookup = await lookupEnrollment(mailboxRow.workspaceId, msg.threadId, from.email);
+  if (!lookup) {
+    return {
+      replyId: null,
+      classification: 'unknown',
+      skipped: true,
+      reason: 'untracked',
+    };
+  }
+
   const ignorePhrases = await loadIgnorePhrases(mailboxRow.workspaceId);
-  // LLM classification first (Claude Haiku — fast + cheap), rule-based fallback.
   const ruleResult = classifyReply(subject, body, from.email, ignorePhrases);
   let classification: ReplyClassification;
   if (isLlmClassifierAvailable() && ruleResult !== 'auto_reply') {
-    // Skip LLM for obvious auto-replies (mailer-daemon, OOO) — saves tokens.
     const llmResult = await classifyWithLlm(subject, body, from.email);
     classification = llmResult ?? ruleResult;
   } else {
     classification = ruleResult;
   }
 
-  // Write the reply row.
   const [inserted] = await db
     .insert(reply)
     .values({
       workspaceId: mailboxRow.workspaceId,
-      campaignLeadId: lookup?.campaignLeadRow.id ?? null,
+      campaignLeadId: lookup.campaignLeadRow.id,
       mailboxId: mailboxRow.id,
       gmailThreadId: msg.threadId,
       gmailMessageId: msg.id,
@@ -305,15 +345,6 @@ export async function ingestMessage(
       receivedAt,
     })
     .returning({ id: reply.id });
-
-  if (!lookup) {
-    return {
-      replyId: inserted?.id ?? null,
-      classification,
-      skipped: false,
-      reason: 'untracked',
-    };
-  }
 
   // Log the `replied` event for analytics + webhooks.
   await db.insert(emailEvent).values({

@@ -263,6 +263,34 @@ export async function listGmailHistory(
   return (await res.json()) as GmailHistoryListResponse;
 }
 
+/**
+ * Adds/removes Gmail labels on a message. Used by the warmup engagement loop
+ * to rescue warmup mail out of SPAM and mark it IMPORTANT + read, which are
+ * the two Gmail engagement signals Postmaster Tools weights most heavily.
+ */
+export async function modifyGmailMessageLabels(
+  accessToken: string,
+  messageId: string,
+  opts: { add?: string[]; remove?: string[] },
+): Promise<void> {
+  const url = `${GMAIL_MESSAGE_URL}/${encodeURIComponent(messageId)}/modify`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      addLabelIds: opts.add ?? [],
+      removeLabelIds: opts.remove ?? [],
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`gmail.users.messages.modify failed (${res.status}): ${text}`);
+  }
+}
+
 /** Fetches one message with full payload (format=full). */
 export async function fetchGmailMessage(
   accessToken: string,

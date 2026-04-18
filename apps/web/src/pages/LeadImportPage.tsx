@@ -10,7 +10,9 @@ import {
 
 type Step = 'upload' | 'map' | 'importing' | 'done'
 
-const FIELD_OPTIONS: { value: ColumnField | ''; label: string }[] = [
+const CUSTOM_VAR_SENTINEL = '__custom_var__' as const
+
+const FIELD_OPTIONS: { value: ColumnField | '' | typeof CUSTOM_VAR_SENTINEL; label: string }[] = [
   { value: '', label: '— Skip —' },
   { value: 'email', label: 'Email *' },
   { value: 'first_name', label: 'First name' },
@@ -19,7 +21,12 @@ const FIELD_OPTIONS: { value: ColumnField | ''; label: string }[] = [
   { value: 'title', label: 'Title' },
   { value: 'phone', label: 'Phone' },
   { value: 'timezone', label: 'Timezone' },
+  { value: CUSTOM_VAR_SENTINEL, label: 'Custom variable…' },
 ]
+
+function sanitizeVarKey(raw: string): string {
+  return raw.toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '')
+}
 
 const HEADER_HINTS: Record<string, ColumnField> = {
   email: 'email',
@@ -186,21 +193,11 @@ export function LeadImportPage() {
                     <strong>{h || `Column ${i + 1}`}</strong>
                   </td>
                   <td>
-                    <select
-                      value={mapping[i] ?? ''}
-                      onChange={(e) =>
-                        setMapping((m) => ({
-                          ...m,
-                          [i]: (e.target.value || null) as ColumnField | null,
-                        }))
-                      }
-                    >
-                      {FIELD_OPTIONS.map((o) => (
-                        <option key={o.value} value={o.value ?? ''}>
-                          {o.label}
-                        </option>
-                      ))}
-                    </select>
+                    <ColumnMap
+                      columnHeader={h}
+                      value={mapping[i] ?? null}
+                      onChange={(v) => setMapping((m) => ({ ...m, [i]: v }))}
+                    />
                   </td>
                   <td className="dim">
                     {preview
@@ -312,5 +309,63 @@ export function LeadImportPage() {
         </div>
       )}
     </AppShell>
+  )
+}
+
+function ColumnMap({
+  columnHeader,
+  value,
+  onChange,
+}: {
+  columnHeader: string
+  value: ColumnField | null
+  onChange: (v: ColumnField | null) => void
+}) {
+  const isCustomVar = typeof value === 'string' && value.startsWith('custom_var:')
+  const currentCustomKey = isCustomVar ? (value as string).slice('custom_var:'.length) : ''
+
+  const selectValue: string = isCustomVar
+    ? CUSTOM_VAR_SENTINEL
+    : value === null
+      ? ''
+      : value
+
+  return (
+    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+      <select
+        value={selectValue}
+        onChange={(e) => {
+          const v = e.target.value
+          if (v === CUSTOM_VAR_SENTINEL) {
+            // Seed with a sanitized version of the CSV header if available.
+            const seeded = sanitizeVarKey(columnHeader) || 'custom'
+            onChange(`custom_var:${seeded}` as ColumnField)
+          } else if (v === '') {
+            onChange(null)
+          } else {
+            onChange(v as ColumnField)
+          }
+        }}
+      >
+        {FIELD_OPTIONS.map((o) => (
+          <option key={String(o.value)} value={String(o.value ?? '')}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+      {isCustomVar && (
+        <input
+          type="text"
+          placeholder="variable name"
+          value={currentCustomKey}
+          onChange={(e) => {
+            const key = sanitizeVarKey(e.target.value)
+            onChange(`custom_var:${key || 'custom'}` as ColumnField)
+          }}
+          style={{ flex: 1, minWidth: 140 }}
+          title="Use as {{name}} in your sequence body"
+        />
+      )}
+    </div>
   )
 }

@@ -46,7 +46,12 @@ export function LeadListsPage() {
   }
 
   async function onDelete(id: number, name: string) {
-    if (!confirm(`Delete list "${name}"? Leads themselves are not deleted.`)) return
+    if (
+      !confirm(
+        `Permanently delete list "${name}"?\n\nThis cannot be undone. The individual lead rows are kept (they just lose their membership in this list).`,
+      )
+    )
+      return
     await deleteLeadList(id)
     await refresh()
   }
