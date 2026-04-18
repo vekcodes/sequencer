@@ -1,20 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import type { CustomVariable } from '../lib/custom-variables'
 
-// A Gmail-style body editor for sequence variants.
+// Gmail-style body editor for sequence variants.
 //
-// Tradeoff: the canonical storage + wire format is plain text (the sequence
-// step variant body column). Bold/italic/list formatting is an authoring
-// affordance — it's visible while composing but stripped on save, because we
-// send real emails as text/plain for deliverability. The hint line below the
-// canvas makes this contract explicit.
-//
-// What IS preserved through save → send:
-//   - Paragraph structure (blank-line separated)
-//   - Line breaks within paragraphs
-//   - Bullet lists (rendered as "- " lines)
-//   - Numbered lists (rendered as "1. " lines)
-//   - Variable tokens ({{first_name}}, {{pain_point|fallback}})
+// Canonical storage + wire format is plain text. Bold/italic/underline are
+// visual affordances while composing — they're stripped on save because we
+// send as text/plain for deliverability. Paragraph breaks, line breaks,
+// bullet lists (→ "- "), numbered lists (→ "1. "), and variable tokens are
+// preserved through save and send.
 
 type Props = {
   value: string
@@ -41,12 +34,6 @@ function escapeHtml(s: string): string {
     .replace(/>/g, '&gt;')
 }
 
-/**
- * Turns stored plain text into contentEditable HTML. Preserves paragraph
- * breaks (blank lines), intra-paragraph line breaks, and reconstructs
- * "- item" / "1. item" lines into <ul>/<ol> blocks so the author sees real
- * list formatting instead of the raw markers.
- */
 function plainTextToHtml(text: string): string {
   if (!text) return ''
   const blocks = text.split(/\n\n+/)
@@ -69,11 +56,6 @@ function plainTextToHtml(text: string): string {
     .join('')
 }
 
-/**
- * Serializes the contentEditable DOM back to plain text. Bold/italic tags are
- * unwrapped (text is kept, markers aren't emitted). Lists render as "- " / "1. "
- * prefixed lines. Paragraphs are separated by blank lines.
- */
 function htmlToPlainText(root: HTMLElement): string {
   const out: string[] = []
   let listCounter = 0
@@ -118,17 +100,16 @@ function htmlToPlainText(root: HTMLElement): string {
       out.push('\n')
       return
     }
-    // span/strong/em/b/i/u/a/code: just traverse children, dropping formatting
     for (const child of Array.from(el.childNodes)) walk(child, parentTag)
   }
 
   for (const child of Array.from(root.childNodes)) walk(child, null)
   return out
     .join('')
-    .replace(/\u00a0/g, ' ') // NBSP → space
+    .replace(/\u00a0/g, ' ')
     .replace(/\r\n/g, '\n')
-    .replace(/\n{3,}/g, '\n\n') // collapse excess blank lines
-    .replace(/[\t ]+$/gm, '') // strip trailing whitespace per line
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[\t ]+$/gm, '')
     .trim()
 }
 
@@ -146,8 +127,6 @@ export function RichBodyEditor({
   const [showVarMenu, setShowVarMenu] = useState(false)
   const varWrapRef = useRef<HTMLDivElement>(null)
 
-  // Initial mount + external value sync (only if parent state genuinely
-  // differs from what we just emitted — avoids fighting the user's cursor).
   useEffect(() => {
     if (!editorRef.current) return
     if (value === lastValueRef.current) return
@@ -155,7 +134,6 @@ export function RichBodyEditor({
     lastValueRef.current = value
   }, [value])
 
-  // Close variable menu on outside click
   useEffect(() => {
     if (!showVarMenu) return
     function onDocClick(e: MouseEvent) {
@@ -177,8 +155,6 @@ export function RichBodyEditor({
   function runCommand(command: string) {
     if (disabled) return
     editorRef.current?.focus()
-    // execCommand is deprecated but universally supported and keeps this
-    // component dependency-free. Fine for bold/italic/list toggles.
     document.execCommand(command)
     emit()
   }
@@ -186,37 +162,13 @@ export function RichBodyEditor({
   function insertAtCursor(text: string) {
     if (disabled) return
     editorRef.current?.focus()
-    // insertText preserves the current caret and selection semantics.
     document.execCommand('insertText', false, text)
     emit()
   }
 
-  const allVars = [
-    ...BUILT_IN_VARS,
-    ...customVariables.map((v) => ({ key: v.key, fallback: v.fallbackDefault })),
-  ]
-
   return (
-    <div
-      style={{
-        border: '1px solid var(--border, #ddd)',
-        borderRadius: 6,
-        background: 'var(--bg-card, #fff)',
-        display: 'flex',
-        flexDirection: 'column',
-        minHeight: 200,
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 4,
-          padding: '6px 8px',
-          borderBottom: '1px solid var(--border, #eee)',
-          flexWrap: 'wrap',
-        }}
-      >
+    <div className="rich-editor">
+      <div className="rich-editor__toolbar">
         <ToolbarButton
           label="Bold (Ctrl+B)"
           disabled={disabled}
@@ -238,7 +190,7 @@ export function RichBodyEditor({
         >
           <span style={{ textDecoration: 'underline' }}>U</span>
         </ToolbarButton>
-        <Divider />
+        <span className="rich-editor__divider" aria-hidden />
         <ToolbarButton
           label="Bullet list"
           disabled={disabled}
@@ -253,8 +205,8 @@ export function RichBodyEditor({
         >
           1.&nbsp;List
         </ToolbarButton>
-        <Divider />
-        <div ref={varWrapRef} style={{ position: 'relative' }}>
+        <span className="rich-editor__divider" aria-hidden />
+        <div ref={varWrapRef} className="rich-editor__var-wrap">
           <ToolbarButton
             label="Insert a variable"
             disabled={disabled}
@@ -263,24 +215,8 @@ export function RichBodyEditor({
             {'{{ }} Variable ▾'}
           </ToolbarButton>
           {showVarMenu && (
-            <div
-              style={{
-                position: 'absolute',
-                top: '100%',
-                left: 0,
-                marginTop: 4,
-                minWidth: 260,
-                maxHeight: 320,
-                overflowY: 'auto',
-                background: 'var(--bg, #fff)',
-                border: '1px solid var(--border, #ddd)',
-                borderRadius: 6,
-                boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-                zIndex: 20,
-                padding: 4,
-              }}
-            >
-              <MenuHeader>Built-in</MenuHeader>
+            <div className="rich-editor__menu">
+              <div className="rich-editor__menu-header">Built-in</div>
               {BUILT_IN_VARS.map((v) => (
                 <VarMenuItem
                   key={v.key}
@@ -293,7 +229,7 @@ export function RichBodyEditor({
               ))}
               {customVariables.length > 0 && (
                 <>
-                  <MenuHeader>Your custom variables</MenuHeader>
+                  <div className="rich-editor__menu-header">Your custom variables</div>
                   {customVariables.map((cv) => (
                     <VarMenuItem
                       key={cv.id}
@@ -306,8 +242,8 @@ export function RichBodyEditor({
                   ))}
                 </>
               )}
-              {customVariables.length === 0 && allVars.length === BUILT_IN_VARS.length && (
-                <div style={{ padding: '8px 10px', fontSize: 12, color: 'var(--text-dim)' }}>
+              {customVariables.length === 0 && (
+                <div className="rich-editor__menu-hint">
                   Define workspace variables on the Custom Variables page to
                   reuse them here.
                 </div>
@@ -324,33 +260,16 @@ export function RichBodyEditor({
         onInput={emit}
         onBlur={emit}
         data-placeholder={placeholder ?? 'Write your email…'}
-        style={{
-          padding: '12px 14px',
-          minHeight: 180,
-          outline: 'none',
-          fontFamily: 'inherit',
-          fontSize: '0.95rem',
-          lineHeight: 1.5,
-          whiteSpace: 'pre-wrap',
-        }}
+        className="rich-editor__canvas"
       />
 
-      <div
-        style={{
-          padding: '6px 10px',
-          borderTop: '1px solid var(--border, #eee)',
-          fontSize: 11,
-          color: 'var(--text-dim, #666)',
-        }}
-      >
+      <div className="rich-editor__hint">
         Sent as plain text. Bold/italic are authoring aids — lists,
         paragraph breaks, and variables are preserved.
       </div>
     </div>
   )
 }
-
-// ─── Small building blocks ──────────────────────────────────────────────────
 
 function ToolbarButton({
   label,
@@ -368,51 +287,12 @@ function ToolbarButton({
       type="button"
       title={label}
       disabled={disabled}
-      onMouseDown={(e) => e.preventDefault()} // keep caret in the canvas
+      onMouseDown={(e) => e.preventDefault()}
       onClick={onClick}
-      style={{
-        background: 'transparent',
-        border: '1px solid transparent',
-        padding: '4px 8px',
-        fontSize: 13,
-        borderRadius: 4,
-        cursor: disabled ? 'not-allowed' : 'pointer',
-        color: 'inherit',
-      }}
+      className="rich-editor__tool"
     >
       {children}
     </button>
-  )
-}
-
-function Divider() {
-  return (
-    <span
-      aria-hidden
-      style={{
-        display: 'inline-block',
-        width: 1,
-        height: 18,
-        background: 'var(--border, #ddd)',
-        margin: '0 4px',
-      }}
-    />
-  )
-}
-
-function MenuHeader({ children }: { children: React.ReactNode }) {
-  return (
-    <div
-      style={{
-        padding: '6px 10px 2px',
-        fontSize: 10,
-        textTransform: 'uppercase',
-        letterSpacing: 0.5,
-        color: 'var(--text-dim, #666)',
-      }}
-    >
-      {children}
-    </div>
   )
 }
 
@@ -429,33 +309,10 @@ function VarMenuItem({
       type="button"
       onMouseDown={(e) => e.preventDefault()}
       onClick={() => onPick(token)}
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'flex-start',
-        gap: 2,
-        width: '100%',
-        padding: '6px 10px',
-        background: 'transparent',
-        border: 0,
-        borderRadius: 4,
-        cursor: 'pointer',
-        textAlign: 'left',
-        color: 'inherit',
-      }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.background = 'var(--bg-muted, #f4f4f5)'
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.background = 'transparent'
-      }}
+      className="rich-editor__menu-item"
     >
-      <code style={{ fontSize: 12 }}>{token}</code>
-      {v.fallback && (
-        <small style={{ color: 'var(--text-dim, #888)' }}>
-          fallback: {v.fallback}
-        </small>
-      )}
+      <code>{token}</code>
+      {v.fallback && <small>fallback: {v.fallback}</small>}
     </button>
   )
 }

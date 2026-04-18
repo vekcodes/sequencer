@@ -9,6 +9,7 @@ import { ApiError } from '../lib/api'
 import { render, SAMPLE_LEAD_VARS } from '../lib/render'
 import { listCustomVariables, type CustomVariable } from '../lib/custom-variables'
 import { RichBodyEditor } from './RichBodyEditor'
+import { listLeads, type LeadView } from '../lib/leads'
 
 type Props = {
   campaignId: number
@@ -35,10 +36,68 @@ export function CampaignSequenceEditor({ campaignId, campaignStatus, onSaved }: 
   const [previewStepIdx, setPreviewStepIdx] = useState(0)
   const [previewVariantIdx, setPreviewVariantIdx] = useState(0)
   const [customVariables, setCustomVariables] = useState<CustomVariable[]>([])
+  const [previewLeads, setPreviewLeads] = useState<LeadView[]>([])
+  const [previewLeadId, setPreviewLeadId] = useState<number | 'sample'>('sample')
 
   useEffect(() => {
     listCustomVariables().then(setCustomVariables).catch(() => {})
   }, [])
+
+  // Pull a page of leads so the preview can use real custom-variable values.
+  // If none exist, the preview falls back to the hardcoded SAMPLE_LEAD_VARS.
+  useEffect(() => {
+    listLeads({ limit: 50, status: 'active' })
+      .then((res) => {
+        setPreviewLeads(res.leads)
+        if (res.leads.length > 0) {
+          const withVars = res.leads.filter(
+            (l) => Object.keys(l.customVariables ?? {}).length > 0,
+          )
+          const pool = withVars.length > 0 ? withVars : res.leads
+          const pick = pool[Math.floor(Math.random() * pool.length)]
+          if (pick) setPreviewLeadId(pick.id)
+        }
+      })
+      .catch(() => {})
+  }, [])
+
+  function pickRandomLead() {
+    if (previewLeads.length === 0) return
+    const withVars = previewLeads.filter(
+      (l) => Object.keys(l.customVariables ?? {}).length > 0,
+    )
+    const pool = withVars.length > 0 ? withVars : previewLeads
+    const pick = pool[Math.floor(Math.random() * pool.length)]
+    if (pick) setPreviewLeadId(pick.id)
+  }
+
+  function buildPreviewVars(): {
+    vars: Record<string, string | null>
+    label: string
+    source: 'lead' | 'sample'
+  } {
+    if (previewLeadId !== 'sample') {
+      const lead = previewLeads.find((l) => l.id === previewLeadId)
+      if (lead) {
+        const vars: Record<string, string | null> = {
+          email: lead.email,
+          first_name: lead.firstName,
+          last_name: lead.lastName,
+          company: lead.company,
+          title: lead.title,
+        }
+        for (const [k, v] of Object.entries(lead.customVariables ?? {})) {
+          vars[k] = v == null ? null : String(v)
+        }
+        return {
+          vars,
+          label: `${lead.firstName ?? ''} ${lead.lastName ?? ''}`.trim() || lead.email,
+          source: 'lead',
+        }
+      }
+    }
+    return { vars: SAMPLE_LEAD_VARS, label: 'Alex Chen (sample)', source: 'sample' }
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -363,18 +422,63 @@ export function CampaignSequenceEditor({ campaignId, campaignStatus, onSaved }: 
 
         <aside className="sequence-editor__preview">
           <h3>Live preview</h3>
-          <p className="dim">
-            Rendered as <strong>Alex Chen</strong> (Acme Inc, VP of Sales).
-          </p>
-          {previewStep && previewVariant ? (
-            <Preview
-              subject={previewVariant.subject}
-              body={previewVariant.body}
-              threaded={previewStep.threadReply && previewStepIdx > 0}
-            />
-          ) : (
-            <p className="dim">Add a step to preview.</p>
-          )}
+          {(() => {
+            const { vars, label, source } = buildPreviewVars()
+            return (
+              <>
+                <div className="preview-lead-picker">
+                  <span>Preview as:</span>
+                  <select
+                    value={previewLeadId === 'sample' ? 'sample' : String(previewLeadId)}
+                    onChange={(e) => {
+                      const v = e.target.value
+                      setPreviewLeadId(v === 'sample' ? 'sample' : Number(v))
+                    }}
+                  >
+                    <option value="sample">Sample lead (no real data)</option>
+                    {previewLeads.map((l) => (
+                      <option key={l.id} value={l.id}>
+                        {(l.firstName || l.lastName
+                          ? `${l.firstName ?? ''} ${l.lastName ?? ''}`.trim()
+                          : l.email) +
+                          (Object.keys(l.customVariables ?? {}).length > 0
+                            ? ` · ${Object.keys(l.customVariables ?? {}).length} vars`
+                            : '')}
+                      </option>
+                    ))}
+                  </select>
+                  {previewLeads.length > 0 && (
+                    <button type="button" onClick={pickRandomLead} title="Pick another lead at random">
+                      🎲 Random
+                    </button>
+                  )}
+                </div>
+                <p className="dim">
+                  Rendered as <strong>{label}</strong>.
+                  {source === 'sample' && previewLeads.length === 0 && (
+                    <> No leads imported yet — using sample values.</>
+                  )}
+                </p>
+                {previewStep && previewVariant ? (
+                  <Preview
+                    subject={previewVariant.subject}
+                    body={previewVariant.body}
+                    threaded={previewStep.threadReply && previewStepIdx > 0}
+                    vars={vars}
+                    leadLabel={label}
+                    hasCustomVars={
+                      source === 'lead' &&
+                      Object.keys(vars).some(
+                        (k) => !['email', 'first_name', 'last_name', 'company', 'title'].includes(k),
+                      )
+                    }
+                  />
+                ) : (
+                  <p className="dim">Add a step to preview.</p>
+                )}
+              </>
+            )
+          })()}
 
           <h4 className="preview-section">Variables you can use</h4>
           <ul className="variable-hints">
@@ -410,20 +514,30 @@ function Preview({
   subject,
   body,
   threaded,
+  vars,
+  leadLabel,
+  hasCustomVars,
 }: {
   subject: string
   body: string
   threaded: boolean
+  vars: Record<string, string | null>
+  leadLabel: string
+  hasCustomVars: boolean
 }) {
-  const subjectRender = render(subject, SAMPLE_LEAD_VARS, 0)
-  const bodyRender = render(body, SAMPLE_LEAD_VARS, 0)
+  const subjectRender = render(subject, vars, 0)
+  const bodyRender = render(body, vars, 0)
+  const unresolved = Array.from(
+    new Set([...subjectRender.unresolved, ...bodyRender.unresolved]),
+  )
+  const toEmail = vars.email || 'lead@example.com'
 
   return (
     <div className="preview-card">
       <div className="preview-card__from">
         <span className="dim small">From:</span>
         <strong>You</strong>
-        <span className="dim small">to {SAMPLE_LEAD_VARS.email}</span>
+        <span className="dim small">to {toEmail}</span>
       </div>
       <div className="preview-card__subject">
         {threaded ? (
@@ -432,13 +546,24 @@ function Preview({
           <strong>{subjectRender.rendered || <em className="dim">No subject</em>}</strong>
         )}
       </div>
-      {(subjectRender.unresolved.length > 0 ||
-        bodyRender.unresolved.length > 0) && (
-        <div className="preview-card__warn">
-          Unresolved variables:{' '}
-          {[...subjectRender.unresolved, ...bodyRender.unresolved]
-            .map((v) => `{{${v}}}`)
-            .join(', ')}
+      {unresolved.length > 0 && (
+        <div className="preview-missing">
+          <strong>No variable in lead data:</strong>{' '}
+          {unresolved.map((v) => `{{${v}}}`).join(', ')}
+          {hasCustomVars ? (
+            <>
+              {' '}
+              — this lead ({leadLabel}) doesn't carry these keys. Add them on
+              the lead, or pick a different preview lead, or set a fallback
+              like <code>{'{{'}name|default{'}}'}</code>.
+            </>
+          ) : (
+            <>
+              {' '}
+              — pick a lead above that has these custom variables, or use the{' '}
+              <code>{'{{'}name|default{'}}'}</code> fallback syntax.
+            </>
+          )}
         </div>
       )}
       <pre className="preview-card__body">
