@@ -207,9 +207,21 @@ export async function bulkUpsertLeads(
 ): Promise<number[]> {
   if (inputs.length === 0) return [];
 
+  // Dedupe by email WITHIN this batch — ON CONFLICT DO UPDATE throws
+  // "cannot affect row a second time" if we send two rows with the same
+  // (workspace_id, email) conflict target in a single INSERT. Keep the last
+  // occurrence so later rows win (matches a user's intuition for updates).
+  const byEmail = new Map<string, CreateLeadInput>();
+  for (const input of inputs) {
+    const key = input.email.toLowerCase().trim();
+    if (!key) continue;
+    byEmail.set(key, input);
+  }
+  const deduped = Array.from(byEmail.values());
+
   const ids: number[] = [];
-  for (let i = 0; i < inputs.length; i += BULK_BATCH_SIZE) {
-    const batch = inputs.slice(i, i + BULK_BATCH_SIZE);
+  for (let i = 0; i < deduped.length; i += BULK_BATCH_SIZE) {
+    const batch = deduped.slice(i, i + BULK_BATCH_SIZE);
     const values = batch.map((input) => ({
       workspaceId,
       ...normalize(input),

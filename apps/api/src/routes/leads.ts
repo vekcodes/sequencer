@@ -207,44 +207,52 @@ leadsRoutes.post('/import', async (c) => {
     return c.json({ error: 'too_many_rows', max: MAX_IMPORT_ROWS }, 413);
   }
 
-  const { valid, errors } = validateAndMap(rows, numericMapping);
+  try {
+    const { valid, errors } = validateAndMap(rows, numericMapping);
 
-  // Filter blocklisted emails (single in-memory pass — no N+1)
-  const checker = await loadBlocklistChecker(user.workspaceId);
-  const filtered: typeof valid = [];
-  const blockedErrors: typeof errors = [];
-  for (const v of valid) {
-    if (checker.isBlocked(v.email)) {
-      blockedErrors.push({ rowIndex: v.rowIndex, reason: 'Email is blocklisted' });
-    } else {
-      filtered.push(v);
+    // Filter blocklisted emails (single in-memory pass — no N+1)
+    const checker = await loadBlocklistChecker(user.workspaceId);
+    const filtered: typeof valid = [];
+    const blockedErrors: typeof errors = [];
+    for (const v of valid) {
+      if (checker.isBlocked(v.email)) {
+        blockedErrors.push({ rowIndex: v.rowIndex, reason: 'Email is blocklisted' });
+      } else {
+        filtered.push(v);
+      }
     }
+
+    // Resolve target lead list (if any)
+    let resolvedListId: number | null = null;
+    if (listId !== undefined) {
+      const list = await getLeadListById(listId, user.workspaceId);
+      if (!list) return c.json({ error: 'list_not_found' }, 404);
+      resolvedListId = list.id;
+    } else if (listName) {
+      const created = await createLeadList(user.workspaceId, listName);
+      resolvedListId = created.id;
+    }
+
+    const importedIds = await bulkUpsertLeads(user.workspaceId, filtered);
+
+    if (resolvedListId !== null && importedIds.length > 0) {
+      await addLeadsToList(resolvedListId, importedIds, user.workspaceId);
+    }
+
+    return c.json({
+      imported: importedIds.length,
+      parsed: rows.length,
+      errors: [...errors, ...blockedErrors],
+      listId: resolvedListId,
+    });
+  } catch (e) {
+    // Surface the actual DB/validation error to the client so a "500" becomes
+    // actionable (e.g. unique-violation details, value too long, etc.).
+    // eslint-disable-next-line no-console
+    console.error('[leads/import] failed:', e);
+    const message = e instanceof Error ? e.message : String(e);
+    return c.json({ error: 'import_failed', message }, 500);
   }
-
-  // Resolve target lead list (if any)
-  let resolvedListId: number | null = null;
-  if (listId !== undefined) {
-    const list = await getLeadListById(listId, user.workspaceId);
-    if (!list) return c.json({ error: 'list_not_found' }, 404);
-    resolvedListId = list.id;
-  } else if (listName) {
-    const created = await createLeadList(user.workspaceId, listName);
-    resolvedListId = created.id;
-  }
-
-  // Bulk upsert
-  const importedIds = await bulkUpsertLeads(user.workspaceId, filtered);
-
-  if (resolvedListId !== null && importedIds.length > 0) {
-    await addLeadsToList(resolvedListId, importedIds, user.workspaceId);
-  }
-
-  return c.json({
-    imported: importedIds.length,
-    parsed: rows.length,
-    errors: [...errors, ...blockedErrors],
-    listId: resolvedListId,
-  });
 });
 
 // ─── Single-lead routes ──────────────────────────────────────────────────────

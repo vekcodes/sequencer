@@ -146,7 +146,19 @@ export function LeadImportPage() {
       setResult(result)
       setStep('done')
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Import failed')
+      // Surface the server's error message (route returns { error, message })
+      // so "500" becomes actionable. Falls back to a generic label otherwise.
+      let msg: string = 'Import failed'
+      if (e && typeof e === 'object' && 'payload' in e) {
+        const payload = (e as { payload: unknown }).payload
+        if (payload && typeof payload === 'object') {
+          const p = payload as { error?: string; message?: string }
+          msg = p.message || p.error || msg
+        }
+      } else if (e instanceof Error) {
+        msg = e.message
+      }
+      setError(msg)
       setStep('map')
     }
   }
@@ -197,9 +209,42 @@ export function LeadImportPage() {
 
       {step === 'map' && (
         <>
-          <div className="banner banner-info">
-            Detected <strong>{totalRows}</strong> data rows in {fileName}.
-            Map each column to a lead field below.
+          {(() => {
+            const mappedCount = Object.values(mapping).filter((v) => v !== null).length
+            return (
+              <div className="banner banner-info">
+                Detected <strong>{totalRows}</strong> data rows in {fileName}.{' '}
+                <strong>{mappedCount}</strong> of {headers.length} columns mapped —
+                unmapped columns are ignored on import.
+              </div>
+            )
+          })()}
+
+          <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => {
+                // Keep only the email mapping; skip all other columns so the
+                // user can re-map just the variables they care about.
+                const emailIdx = Object.entries(mapping).find(([, v]) => v === 'email')?.[0]
+                const next: Record<number, ColumnField | null> = {}
+                for (let i = 0; i < headers.length; i++) next[i] = null
+                if (emailIdx !== undefined) next[Number(emailIdx)] = 'email'
+                setMapping(next)
+              }}
+              title="Skip every column except email, then pick only the variables you want."
+            >
+              Clear to email only
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => setMapping(autoMap(headers, customVars))}
+              title="Re-run auto-detection"
+            >
+              Auto-map again
+            </button>
           </div>
 
           <table className="data-table">
