@@ -18,6 +18,7 @@ import { repliesRoutes } from './routes/replies';
 import { webhooksRoutes } from './routes/webhooks';
 import { pubsubRoutes } from './routes/pubsub';
 import { unsubscribeRoutes } from './routes/unsubscribe';
+import { customVariablesRoutes } from './routes/custom-variables';
 import { startHealthScheduler } from './lib/health-scheduler';
 import { startSendScheduler } from './lib/send-scheduler';
 import { startReplyScheduler } from './lib/reply-scheduler';
@@ -58,6 +59,7 @@ app.route('/api/campaigns', campaignsRoutes);
 app.route('/api/stats', statsRoutes);
 app.route('/api/replies', repliesRoutes);
 app.route('/api/webhooks', webhooksRoutes);
+app.route('/api/custom-variables', customVariablesRoutes);
 // Pub/Sub push endpoint is mounted at root (no /api prefix and no auth middleware).
 app.route('/pubsub', pubsubRoutes);
 // Unsubscribe endpoint is public — hit by email recipients.

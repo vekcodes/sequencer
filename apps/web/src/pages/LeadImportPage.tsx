@@ -1,4 +1,4 @@
-import { useState, type ChangeEvent, type FormEvent } from 'react'
+import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { AppShell } from '../components/AppShell'
 import {
@@ -7,6 +7,10 @@ import {
   type ColumnField,
   type ImportLeadsResponse,
 } from '../lib/leads'
+import {
+  listCustomVariables,
+  type CustomVariable,
+} from '../lib/custom-variables'
 
 type Step = 'upload' | 'map' | 'importing' | 'done'
 
@@ -49,11 +53,26 @@ const HEADER_HINTS: Record<string, ColumnField> = {
   tz: 'timezone',
 }
 
-function autoMap(headers: string[]): Record<number, ColumnField | null> {
+function autoMap(
+  headers: string[],
+  customVars: CustomVariable[],
+): Record<number, ColumnField | null> {
   const m: Record<number, ColumnField | null> = {}
+  const varKeys = new Set(customVars.map((v) => v.key))
   for (let i = 0; i < headers.length; i++) {
-    const key = headers[i]?.toLowerCase().trim() ?? ''
-    m[i] = HEADER_HINTS[key] ?? null
+    const raw = headers[i]?.toLowerCase().trim() ?? ''
+    if (HEADER_HINTS[raw]) {
+      m[i] = HEADER_HINTS[raw] ?? null
+      continue
+    }
+    // Match against user-defined custom variables using the same slugification
+    // rule as the UI. "Pain Point" header + "pain_point" variable → auto-map.
+    const slug = sanitizeVarKey(raw)
+    if (slug && varKeys.has(slug)) {
+      m[i] = `custom_var:${slug}` as ColumnField
+      continue
+    }
+    m[i] = null
   }
   return m
 }
@@ -72,6 +91,11 @@ export function LeadImportPage() {
   const [listName, setListName] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<ImportLeadsResponse | null>(null)
+  const [customVars, setCustomVars] = useState<CustomVariable[]>([])
+
+  useEffect(() => {
+    listCustomVariables().then(setCustomVars).catch(() => {})
+  }, [])
 
   async function onFile(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
@@ -98,7 +122,7 @@ export function LeadImportPage() {
       setHeaders(result.headers)
       setPreview(result.preview)
       setTotalRows(result.totalRows)
-      setMapping(autoMap(result.headers))
+      setMapping(autoMap(result.headers, customVars))
       setStep('map')
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to parse CSV')
@@ -196,6 +220,7 @@ export function LeadImportPage() {
                     <ColumnMap
                       columnHeader={h}
                       value={mapping[i] ?? null}
+                      customVars={customVars}
                       onChange={(v) => setMapping((m) => ({ ...m, [i]: v }))}
                     />
                   </td>
@@ -315,17 +340,25 @@ export function LeadImportPage() {
 function ColumnMap({
   columnHeader,
   value,
+  customVars,
   onChange,
 }: {
   columnHeader: string
   value: ColumnField | null
+  customVars: CustomVariable[]
   onChange: (v: ColumnField | null) => void
 }) {
   const isCustomVar = typeof value === 'string' && value.startsWith('custom_var:')
   const currentCustomKey = isCustomVar ? (value as string).slice('custom_var:'.length) : ''
+  const predefinedKeys = new Set(customVars.map((v) => v.key))
+  // "Ad-hoc" = the user picked Custom variable… with a key that isn't in the
+  // workspace-defined list. We show the text input so they can type one.
+  const isAdHocCustomVar = isCustomVar && !predefinedKeys.has(currentCustomKey)
 
   const selectValue: string = isCustomVar
-    ? CUSTOM_VAR_SENTINEL
+    ? predefinedKeys.has(currentCustomKey)
+      ? (value as string) // the full "custom_var:<key>" string
+      : CUSTOM_VAR_SENTINEL
     : value === null
       ? ''
       : value
@@ -337,11 +370,12 @@ function ColumnMap({
         onChange={(e) => {
           const v = e.target.value
           if (v === CUSTOM_VAR_SENTINEL) {
-            // Seed with a sanitized version of the CSV header if available.
             const seeded = sanitizeVarKey(columnHeader) || 'custom'
             onChange(`custom_var:${seeded}` as ColumnField)
           } else if (v === '') {
             onChange(null)
+          } else if (v.startsWith('custom_var:')) {
+            onChange(v as ColumnField)
           } else {
             onChange(v as ColumnField)
           }
@@ -352,8 +386,17 @@ function ColumnMap({
             {o.label}
           </option>
         ))}
+        {customVars.length > 0 && (
+          <optgroup label="Your custom variables">
+            {customVars.map((cv) => (
+              <option key={cv.id} value={`custom_var:${cv.key}`}>
+                {`{{${cv.key}}}`}
+              </option>
+            ))}
+          </optgroup>
+        )}
       </select>
-      {isCustomVar && (
+      {isAdHocCustomVar && (
         <input
           type="text"
           placeholder="variable name"
@@ -363,7 +406,7 @@ function ColumnMap({
             onChange(`custom_var:${key || 'custom'}` as ColumnField)
           }}
           style={{ flex: 1, minWidth: 140 }}
-          title="Use as {{name}} in your sequence body"
+          title="Use as {{name}} in your sequence body. Save it from the Custom Variables page to reuse across imports."
         />
       )}
     </div>

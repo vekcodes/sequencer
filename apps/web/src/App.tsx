@@ -12,6 +12,7 @@ import { BlocklistsPage } from './pages/BlocklistsPage'
 import { CampaignsPage } from './pages/CampaignsPage'
 import { CampaignDetailPage } from './pages/CampaignDetailPage'
 import { MasterInboxPage } from './pages/MasterInboxPage'
+import { CustomVariablesPage } from './pages/CustomVariablesPage'
 import { RequireAuth } from './components/RequireAuth'
 
 function App() {
@@ -104,6 +105,14 @@ function App() {
         element={
           <RequireAuth>
             <MasterInboxPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/custom-variables"
+        element={
+          <RequireAuth>
+            <CustomVariablesPage />
           </RequireAuth>
         }
       />

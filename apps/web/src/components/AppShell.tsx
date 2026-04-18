@@ -54,6 +54,13 @@ const icons = {
       <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
     </svg>
   ),
+  customVar: (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 7V4h16v3" />
+      <path d="M9 20h6" />
+      <path d="M12 4v16" />
+    </svg>
+  ),
   collapse: (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <line x1="3" y1="12" x2="21" y2="12" />
@@ -124,6 +131,10 @@ export function AppShell({ children }: { children: ReactNode }) {
           <NavLink to="/mailboxes" className="sidebar__link">
             <span className="sidebar__icon">{icons.mailbox}</span>
             {!collapsed && <span>Sender Emails</span>}
+          </NavLink>
+          <NavLink to="/custom-variables" className="sidebar__link">
+            <span className="sidebar__icon">{icons.customVar}</span>
+            {!collapsed && <span>Custom Variables</span>}
           </NavLink>
           <NavLink to="/blocklist" className="sidebar__link">
             <span className="sidebar__icon">{icons.blocklist}</span>
