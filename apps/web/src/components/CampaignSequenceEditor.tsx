@@ -7,6 +7,8 @@ import {
 } from '../lib/campaigns'
 import { ApiError } from '../lib/api'
 import { render, SAMPLE_LEAD_VARS } from '../lib/render'
+import { listCustomVariables, type CustomVariable } from '../lib/custom-variables'
+import { RichBodyEditor } from './RichBodyEditor'
 
 type Props = {
   campaignId: number
@@ -32,6 +34,11 @@ export function CampaignSequenceEditor({ campaignId, campaignStatus, onSaved }: 
   const [dirty, setDirty] = useState(false)
   const [previewStepIdx, setPreviewStepIdx] = useState(0)
   const [previewVariantIdx, setPreviewVariantIdx] = useState(0)
+  const [customVariables, setCustomVariables] = useState<CustomVariable[]>([])
+
+  useEffect(() => {
+    listCustomVariables().then(setCustomVariables).catch(() => {})
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -310,14 +317,13 @@ export function CampaignSequenceEditor({ campaignId, campaignStatus, onSaved }: 
                       }
                     />
                   )}
-                  <textarea
-                    className="seq-variant__body"
-                    placeholder="Email body. Supports {{first_name|there}}, {{company}}, and spintax {Hi|Hey|Hello}."
-                    rows={8}
-                    disabled={locked}
+                  <RichBodyEditor
                     value={variant.body}
-                    onChange={(e) =>
-                      updateVariant(stepIdx, varIdx, { body: e.target.value })
+                    disabled={locked}
+                    customVariables={customVariables}
+                    placeholder="Write your email. Supports {{first_name|there}}, {{company}}, and spintax {Hi|Hey|Hello}."
+                    onChange={(next) =>
+                      updateVariant(stepIdx, varIdx, { body: next })
                     }
                   />
                 </div>
@@ -375,6 +381,15 @@ export function CampaignSequenceEditor({ campaignId, campaignStatus, onSaved }: 
             {VARIABLE_HINTS.map((v) => (
               <li key={v}>
                 <code>{v}</code>
+              </li>
+            ))}
+            {customVariables.map((cv) => (
+              <li key={cv.id}>
+                <code>
+                  {cv.fallbackDefault
+                    ? `{{${cv.key}|${cv.fallbackDefault}}}`
+                    : `{{${cv.key}}}`}
+                </code>
               </li>
             ))}
           </ul>

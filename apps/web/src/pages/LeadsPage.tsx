@@ -206,6 +206,7 @@ export function LeadsPage() {
                 <th>Name</th>
                 <th>Company</th>
                 <th>Title</th>
+                <th>Variables</th>
                 <th>Status</th>
                 <th></th>
               </tr>
@@ -226,6 +227,9 @@ export function LeadsPage() {
                   </td>
                   <td>{l.company ?? '—'}</td>
                   <td>{l.title ?? '—'}</td>
+                  <td>
+                    <CustomVarsCell vars={l.customVariables} />
+                  </td>
                   <td>
                     <span className={`badge badge--lead-${l.status}`}>
                       {l.status}
@@ -270,6 +274,88 @@ export function LeadsPage() {
         </>
       )}
     </AppShell>
+  )
+}
+
+// ─── Custom variables cell ─────────────────────────────────────────────────
+
+function CustomVarsCell({ vars }: { vars: Record<string, unknown> }) {
+  const [open, setOpen] = useState(false)
+  const entries = Object.entries(vars ?? {}).filter(
+    ([, v]) => v !== null && v !== undefined && String(v).length > 0,
+  )
+  if (entries.length === 0) return <span className="dim">—</span>
+
+  const title = entries
+    .map(([k, v]) => `${k}: ${String(v)}`)
+    .join('\n\n')
+
+  const summary =
+    entries.length === 1
+      ? `${entries[0]![0]}`
+      : `${entries[0]![0]} +${entries.length - 1} more`
+
+  return (
+    <>
+      <button
+        type="button"
+        className="row-action"
+        style={{ fontSize: '0.8rem', padding: '2px 6px' }}
+        onClick={() => setOpen(true)}
+        title={title}
+      >
+        {summary}
+      </button>
+      {open && (
+        <div
+          role="dialog"
+          onClick={() => setOpen(false)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.35)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 50,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: 'var(--bg, #fff)',
+              color: 'var(--text, #111)',
+              border: '1px solid var(--border, #ddd)',
+              borderRadius: 8,
+              padding: '1rem 1.25rem',
+              maxWidth: 520,
+              maxHeight: '70vh',
+              overflow: 'auto',
+              width: '90%',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h3 style={{ margin: 0 }}>Custom variables</h3>
+              <button type="button" className="row-action" onClick={() => setOpen(false)}>
+                ✕
+              </button>
+            </div>
+            <dl style={{ marginTop: '0.75rem' }}>
+              {entries.map(([k, v]) => (
+                <div key={k} style={{ marginBottom: '0.75rem' }}>
+                  <dt>
+                    <code>{`{{${k}}}`}</code>
+                  </dt>
+                  <dd style={{ margin: '0.25rem 0 0', whiteSpace: 'pre-wrap' }}>
+                    {String(v)}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        </div>
+      )}
+    </>
   )
 }
 
