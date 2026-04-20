@@ -1,7 +1,7 @@
 // Master inbox — Phase 7 backing service. Reads the `reply` table with
 // workspace scoping and exposes patch ops for read/starred/archived flags.
 
-import { and, eq, desc, sql, inArray, or, ilike } from 'drizzle-orm';
+import { and, eq, desc, sql, inArray, or, ilike, isNotNull } from 'drizzle-orm';
 import { reply, lead, campaignLead, campaign, mailbox } from '@ces/db';
 import { db } from '../lib/db';
 import { sendGmailMessage } from '../lib/gmail-send';
@@ -82,7 +82,13 @@ export async function listReplies(input: ListRepliesInput): Promise<{
   page: number;
   limit: number;
 }> {
-  const conditions = [eq(reply.workspaceId, input.workspaceId)];
+  // Master inbox shows ONLY replies tied to a campaign lead. Untracked mail is
+  // already dropped at ingestion, but this belt-and-suspenders filter also
+  // hides any legacy rows with a null campaignLeadId.
+  const conditions = [
+    eq(reply.workspaceId, input.workspaceId),
+    isNotNull(reply.campaignLeadId),
+  ];
   if (input.filter === 'unread') conditions.push(eq(reply.read, false));
   if (input.filter === 'interested')
     conditions.push(eq(reply.classification, 'interested'));
@@ -156,7 +162,13 @@ export async function getReply(
     .leftJoin(campaignLead, eq(campaignLead.id, reply.campaignLeadId))
     .leftJoin(campaign, eq(campaign.id, campaignLead.campaignId))
     .leftJoin(lead, eq(lead.id, campaignLead.leadId))
-    .where(and(eq(reply.id, id), eq(reply.workspaceId, workspaceId)))
+    .where(
+      and(
+        eq(reply.id, id),
+        eq(reply.workspaceId, workspaceId),
+        isNotNull(reply.campaignLeadId),
+      ),
+    )
     .limit(1);
   return row ? toView(row) : null;
 }
@@ -197,7 +209,12 @@ export async function getReplyCounts(workspaceId: number): Promise<{
       archived: sql<number>`count(*) filter (where ${reply.archived} = true)::int`,
     })
     .from(reply)
-    .where(eq(reply.workspaceId, workspaceId));
+    .where(
+      and(
+        eq(reply.workspaceId, workspaceId),
+        isNotNull(reply.campaignLeadId),
+      ),
+    );
   const r = rows[0];
   return {
     total: r?.total ?? 0,

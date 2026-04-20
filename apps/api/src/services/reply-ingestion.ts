@@ -134,8 +134,9 @@ type LookupResult = {
  *   1. gmailThreadId match on a known enrollment (best).
  *   2. Lead email match in ANY active campaign in the workspace (fallback).
  *
- * Returns null if neither hits — the reply is "untracked" and we still save it
- * to master inbox but don't advance enrollment state.
+ * Returns null if neither hits — the reply is "untracked" and is dropped
+ * before the DB insert so the master inbox only ever contains campaign-lead
+ * replies (see ingestMessage: untracked branch returns skipped=true).
  */
 async function lookupEnrollment(
   workspaceId: number,
