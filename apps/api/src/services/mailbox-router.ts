@@ -129,7 +129,13 @@ export async function loadCampaignSenders(
     .groupBy(scheduledEmail.mailboxId);
   const lastSendByMailbox = new Map<number, Date>();
   for (const row of lastSendRows) {
-    if (row.lastAt) lastSendByMailbox.set(row.mailboxId, row.lastAt);
+    // postgres-js returns `max(timestamptz)` as an ISO string, not a Date —
+    // the drizzle `sql<Date | null>` annotation is only a type hint. Coerce
+    // here so computeJitteredSendAt can safely call .getTime() on it.
+    if (row.lastAt) {
+      const d = row.lastAt instanceof Date ? row.lastAt : new Date(row.lastAt as unknown as string);
+      if (!Number.isNaN(d.getTime())) lastSendByMailbox.set(row.mailboxId, d);
+    }
   }
 
   return senders
@@ -221,7 +227,9 @@ export type PickInput = {
  * pass the same slice in for every enrollment.
  */
 export function pickMailbox(input: PickInput): RouterMailbox | null {
-  // 1. Sticky
+  // 1. Sticky — thread continuity beats rotation. If the sticky mailbox sent
+  // recently, the 10-min inter-send floor in computeJitteredSendAt will push
+  // this send forward; we don't break the thread to rotate.
   if (input.assignedMailboxId !== null) {
     const sticky = input.senders.find((s) => s.id === input.assignedMailboxId);
     if (sticky && isViable(sticky)) return sticky;
@@ -238,6 +246,18 @@ export function pickMailbox(input: PickInput): RouterMailbox | null {
   const primed = candidates.filter((c) => c.pool === 'primed');
   const pool = primed.length > 0 ? primed : candidates;
 
-  // 4. Weighted random
-  return weightedPick(pool);
+  // 4. Cooldown preference — among the chosen pool, prefer mailboxes that
+  // haven't sent within the inter-send floor window. This is how "send from
+  // another email while this one cools down" is actually enforced at pick
+  // time (the floor in computeJitteredSendAt is the backstop if every mailbox
+  // is hot).
+  const now = Date.now();
+  const cooldownMs = DEFAULTS.rateLimit.minInterSendSeconds * 1000;
+  const cold = pool.filter(
+    (m) => !m.lastSendAt || now - m.lastSendAt.getTime() >= cooldownMs,
+  );
+  const finalPool = cold.length > 0 ? cold : pool;
+
+  // 5. Weighted random
+  return weightedPick(finalPool);
 }

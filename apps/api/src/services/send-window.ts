@@ -310,11 +310,19 @@ export function computeJitteredSendAt(input: JitterInput): Date {
   }
 
   // Hard floor: at least 60s after the last send from this mailbox.
+  // Defensively coerce — some drivers hand us an ISO string here despite the
+  // Date type annotation. Calling .getTime() on a string used to crash the tick.
   if (input.lastSendFromMailbox) {
-    const floor = new Date(
-      input.lastSendFromMailbox.getTime() + DEFAULTS.rateLimit.minInterSendSeconds * 1000,
-    );
-    if (candidate.getTime() < floor.getTime()) candidate = floor;
+    const last =
+      input.lastSendFromMailbox instanceof Date
+        ? input.lastSendFromMailbox
+        : new Date(input.lastSendFromMailbox as unknown as string);
+    if (!Number.isNaN(last.getTime())) {
+      const floor = new Date(
+        last.getTime() + DEFAULTS.rateLimit.minInterSendSeconds * 1000,
+      );
+      if (candidate.getTime() < floor.getTime()) candidate = floor;
+    }
   }
 
   // Snap forward past any avoid-hours window and out of the window if needed.

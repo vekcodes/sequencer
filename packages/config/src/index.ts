@@ -86,8 +86,8 @@ export const DEFAULTS = {
   rateLimit: {
     /** Max emails to a single recipient domain per hour, workspace-wide. */
     perDomainPerHour: 5,
-    /** Hard floor between two consecutive sends from the same mailbox. */
-    minInterSendSeconds: 60,
+    /** Hard floor between two consecutive sends from the same mailbox (10 min). */
+    minInterSendSeconds: 600,
     /** First-send-of-day jitter window — anti "bot at 9:00:00" pattern. */
     firstSendJitterMaxMinutes: 30,
   },
