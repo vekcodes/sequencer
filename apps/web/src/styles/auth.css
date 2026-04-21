@@ -1454,7 +1454,9 @@ a:hover {
   flex-wrap: wrap;
   margin-top: 0.5rem;
 }
-.day-toggle {
+/* Scoped under .auth-card to beat the `.auth-card button` base rule's
+   specificity (which otherwise paints every day blue). */
+.auth-card .day-toggle {
   background: var(--panel-2);
   border: 1px solid var(--border);
   color: var(--text-dim);
@@ -1464,11 +1466,20 @@ a:hover {
   cursor: pointer;
   font-weight: 500;
   min-width: 48px;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
-.day-toggle--on {
+.auth-card .day-toggle:hover:not(:disabled) {
+  background: var(--panel);
+  border-color: var(--text-dim);
+}
+.auth-card .day-toggle--on {
   background: var(--accent);
   border-color: var(--accent);
   color: white;
+}
+.auth-card .day-toggle--on:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
 }
 
 /* ─── Senders editor ─── */

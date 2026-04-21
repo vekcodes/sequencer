@@ -36,6 +36,12 @@ async function tickLoop() {
           `deferred_vars=${result.deferredUnresolvedVars} ` +
           `errors=${result.errors.length}`,
       );
+      for (const err of result.errors) {
+        // eslint-disable-next-line no-console
+        console.error(
+          `[scheduler-tick] campaign=${err.campaignId} error:\n${err.error}`,
+        );
+      }
     }
   } catch (e) {
     // eslint-disable-next-line no-console
